@@ -1,0 +1,904 @@
+//---------------------------------------------------------------------------
+//
+//                     КЛОЧКОВ ПАВЕЛ
+//             http://www.interestprograms.ru
+//---------------------------------------------------------------------------
+
+#include <vcl.h>
+#pragma hdrstop
+
+#include "UMain.h"
+//---------------------------------------------------------------------------
+#pragma package(smart_init)
+#pragma resource "*.dfm"
+TMainForm *MainForm;
+//---------------------------------------------------------------------------
+__fastcall TMainForm::TMainForm(TComponent* Owner)
+  : TForm(Owner)
+{
+  //инициализация
+  randomize();// функция нужна для тщательного перемешивания колоды ShufflePack()
+  m_IsNewParty   = true;// это новая партия
+  m_IsFirstMove  = true;// первый ход в игре
+
+  TimerMain->Interval = 600;// здесь можно изменить время раздумия игроков
+
+
+  //чтобы создать видимость клиентской области
+  Bevel1->Align = alClient;
+
+  InitPack();// создаем колоду
+  InitMoney(true);// всем по 100 рублей
+
+  // имя пользователя
+  LNameUser->Caption = "Евгеша";//здесь можешь изменять начальное имя в окне регистрации
+  RegistrationUser();// окошечко регистрации перед основным окном
+
+
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+//---------------------------------------------------------------------------
+//                          ФУНКЦИИ ИНИЦИАЛИЗАЦИИ
+//---------------------------------------------------------------------------
+//         выполняются при запуске приложения или при инициализации новой игры
+
+// инициализация денег в игре
+void TMainForm::InitMoney(bool reset)
+{
+  if(reset == true){
+    //всем по 100 долларов
+    m_UserMoney  = 100; //  руб
+    m_LeftMoney  = 100; //  руб
+    m_RightMoney = 100; //  руб
+    m_BankMoney  = 0;   //  руб
+  }
+
+  LMoneyUser->Caption  = IntToStr(m_UserMoney)  + "р.";
+  LMoneyLeft->Caption  = IntToStr(m_LeftMoney)  + "р.";
+  LMoneyRight->Caption = IntToStr(m_RightMoney) + "р.";
+  LMoneyBank->Caption  = IntToStr(m_BankMoney)  + "р.";
+}
+
+void TMainForm::RegistrationUser()
+{
+  // создаем окно запроса имя пользователя
+  m_wndNamePlayer = new TFNamePlayer(this);
+
+  m_wndNamePlayer->EditName->Text = LNameUser->Caption;
+
+  //режим показа модальный
+  m_wndNamePlayer->ShowModal();
+  
+  // снимаем введенное имя игрока или имя в случае нежелания ввода своего имени
+  LNameUser->Caption = m_wndNamePlayer->m_NamePlayer;
+
+  //удаляем из памяти объект за ненадобностью
+  // иначе прикаждом открытии программы будет происходить утечка памяти
+  delete m_wndNamePlayer;
+}
+
+
+// инициализация карт и создание колоды
+void TMainForm::InitPack()
+{
+  Graphics::TBitmap* bmp = new Graphics::TBitmap;// создаем объект bmp в динамической памяти
+  int mast  = 0;
+  int value = 0;
+  for(int i = 0; i < 36; i++){
+    m_Card[i] = new TFCard(MainForm/*this*/);
+    m_Card[i]->Parent  = this;// карты будут детьми главной формы
+    m_Card[i]->Visible = true;// и будут видимы
+
+
+    ImageList1->GetBitmap(i, bmp);// извлекаем картинку из ImageList
+    // через каждые 9 карт меняем масть и значение начиная с 6-ки
+    if( i % 9 == 0){ 
+      mast++;
+      value = 1;
+    }
+
+    // назначение лицевая сторона, масть, значение
+    m_Card[i]->InitFace(bmp, mast, value);
+
+    value++;
+  }
+
+  // после выполненной работы удаляем объект из памяти
+  // иначе при каждом открытии программы будет происходить утечка памяти
+  delete bmp;
+
+  //колоду на место
+  CardToPack(Width/2-40, 10);
+
+}
+
+
+
+// инициализация координат размещения карт игроков на столе
+void TMainForm::InitCoordinats()
+{
+  int centerWidth = ClientWidth/2 - CARDWIDTH/2;
+  UserCardLeft[0]  = centerWidth - 187;
+  UserCardLeft[1]  = centerWidth - 153;
+  UserCardLeft[2]  = centerWidth - 119;
+  UserCardLeft[3]  = centerWidth - 85;
+  UserCardLeft[4]  = centerWidth - 51;
+  UserCardLeft[5]  = centerWidth - 17; // 34/2
+  //------- середина ----------------
+  UserCardLeft[6]  = centerWidth + 17; // 34/2
+  UserCardLeft[7]  = centerWidth + 51;
+  UserCardLeft[8]  = centerWidth + 85;
+  UserCardLeft[9]  = centerWidth + 119;
+  UserCardLeft[10] = centerWidth + 153;
+  UserCardLeft[11] = centerWidth + 187;
+  
+
+  int centerHeight = ClientHeight/2 - CARDHEIGHT/2;
+  CompCardTop[0]  = centerHeight - 110;
+  CompCardTop[1]  = centerHeight - 90;
+  CompCardTop[2]  = centerHeight - 70;
+  CompCardTop[3]  = centerHeight - 50;
+  CompCardTop[4]  = centerHeight - 30;
+  CompCardTop[5]  = centerHeight - 10; // 20/2
+  //------ середина ------------------
+  CompCardTop[6]  = centerHeight + 10; // 20/2
+  CompCardTop[7]  = centerHeight + 30;
+  CompCardTop[8]  = centerHeight + 50;
+  CompCardTop[9]  = centerHeight + 70;
+  CompCardTop[10] = centerHeight + 90;
+  CompCardTop[11] = centerHeight + 110;
+}
+
+
+//---------------------------------------------------------------------------
+
+void __fastcall TMainForm::FormPaint(TObject *Sender)
+{
+
+  Canvas->Brush->Color = (TColor)RGB(200,200,200);
+  //нарисуем клеточки
+  int width  = CARDWIDTH  + 2/* добавляем 2 пикселя для красоты*/;// ширина ячейки
+  int height = CARDHEIGHT + 2;// высота ячейки
+  int x = CARDWIDTH  + /*расстояние между ячейками*/4;
+  int y = CARDHEIGHT + /*расстояние между ячейками*/4;
+
+  // стараемся чтобы по ширине все было по середине
+  int firstX = ClientWidth/2  - (width*9)/2  - (8*2)/2; // девять мест-восемь промежутков-умножить на пикселя
+
+  // а по высоте чуть (на 10 пикселей) повыше
+  int firstY = ClientHeight/2 - (height*4)/2 - 10;
+
+  for(int i = 0; i < 4; i++){
+    for(int j = 0; j < 9; j++){
+
+      Canvas->Rectangle(firstX +  x*j, firstY + y*i,
+                      firstX + x*j+width, firstY + y*i+height);
+
+      // тут же назначаем координаты карт игрового стола
+      // чтобы карты располагались точно по ячейкам
+      CoordinatesTableCard[i][j].x = firstX +  x*j + 1;
+      CoordinatesTableCard[i][j].y = firstY +  y*i + 1;
+    }
+  }
+
+}
+//---------------------------------------------------------------------------
+
+
+void __fastcall TMainForm::NExitClick(TObject *Sender)
+{
+  Close();// закрытие программы
+}
+//---------------------------------------------------------------------------
+
+
+// сгоняем карты в культурную колоду
+void TMainForm::CardToPack(int x, int y)
+{
+  //располагаем колоду в нужном месте
+  int X = x; // координата размещения колоды по ширине
+  int Y = y; // координата размещения колоды по высоте
+  for(int i = 0; i < 36; i++){
+      m_Card[i]->Left = X + i*0.3;
+      m_Card[i]->Top  = Y + i*0.3;
+  }
+}
+
+
+// функция сдачи карт игрокам
+void TMainForm::DistrPack()
+{
+  // инициализация координат карт игроков
+  InitCoordinats();
+
+  // закроем все карты
+  for(int i = 0; i< 36; i++){
+    m_Card[i]->CardOpen(false);
+  }
+
+  // прежде чем раздать карты перемешаем колоду
+  ShufflePack();
+
+  // перед игрой деньги на бочку и точка
+  for(int player = 1; player <= 3; player++){
+    MoneyToBank(player);
+  } 
+
+
+  int count = 0;
+  // с кого начинаем сдачу карт
+  int countPlayer  = GOINGPLAYER;
+  int countCardPos = 0;
+  while(count != 36){
+    switch(countPlayer){
+      case USERPLAYER:
+        m_Card[count]->Left = UserCardLeft[countCardPos];
+        m_Card[count]->Top  = ClientHeight - CARDHEIGHT - 5;
+        m_Card[count]->CardOpen(true);
+        m_Card[count]->m_State = USERPLAYER;
+        break;
+      case LEFTPLAYER:
+        m_Card[count]->Top  = CompCardTop[countCardPos];
+        m_Card[count]->Left = 5;
+        m_Card[count]->m_State = LEFTPLAYER;
+        m_Card[count]->CardOpen(false);// здесь можешь закрывать(false) и открывать(true) карты левого игрока
+        break;
+      case RIGHTPLAYER:
+        m_Card[count]->Top  = CompCardTop[countCardPos];
+        m_Card[count]->Left = ClientWidth - CARDWIDTH - 5;
+        m_Card[count]->m_State = RIGHTPLAYER;
+        m_Card[count]->CardOpen(false);// здесь можешь закрывать(false) и открывать(true) карты правого игрока
+        break;
+
+    }
+    countPlayer++;
+    if(countPlayer == 4) countPlayer = 1;
+    
+    if( (count+1) % 3 == 0)   countCardPos++;
+
+    count++;
+  }
+
+
+  // правильно располагаем карты пользователя
+  UserCardsPos();
+
+  m_bEndGame = false;// разрешение на продолжение игры
+  //карты только что раздали следовательно первого хода еще не было
+  m_IsFirstMove = true;
+
+  // запускаем главный таймер
+  TimerMain->Enabled = true;
+}
+
+
+void __fastcall TMainForm::NNewGameClick(TObject *Sender)
+{
+
+  m_IsNewParty  = true;// указываем, что это новая партия
+  InitMoney(true);
+
+  NNextGameClick(NULL);
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TMainForm::NNextGameClick(TObject *Sender)
+{
+  // начата новая игра, нельзя нажать элемент меню "Следующая игра"
+  // а только новая партия т.к. это нарушение правил игры
+  NNextGame->Enabled      = false;
+  NPopupNextgame->Enabled = false;
+
+
+  GOINGPLAYER++; // ходит следующий после раздавшего карты
+  if(GOINGPLAYER == 4) GOINGPLAYER = 1;
+
+  DistrPack();
+}
+//---------------------------------------------------------------------------
+
+
+
+void __fastcall TMainForm::NNewPlayerClick(TObject *Sender)
+{
+  RegistrationUser();
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TMainForm::TimerMainTimer(TObject *Sender)
+{
+  //
+  TimerMain->Enabled = false;
+
+  // если игра закончена, дальнейшее выполнение кода запрещаем
+  if(IsEndGame() == true) return;
+
+  WhoGoes();
+
+   
+}
+//---------------------------------------------------------------------------
+
+// функция хода компьютерных игроков
+void TMainForm::GoComp()
+{
+  //гасим надпись
+  LTablo->Visible = false;
+
+  // если начало новой партии и первый ход в игре
+  if(m_IsNewParty == true && m_IsFirstMove == true){
+    //ищем девятку если есть ходим
+    for(int i = 0; i < 36; i++){
+      if(m_Card[i]->m_State == GOINGPLAYER &&
+         m_Card[i]->m_Value == e_9 && m_Card[i]->m_Mast == e_bubi){
+
+         m_Card[i]->CardOpen(true);//открываем карту
+         //непосредственно ход
+         DoGoCard(m_Card[i]);
+         return;
+      }
+    }
+  }
+  else{
+
+
+    bool BREAK = false;
+    bool is_go = false;
+    // ищем карту которой может ходить компьютерный игрок
+    // сначала ищем не девятку, чтобы девяткой удерживать больше игрков
+    for(int t = 0; t < 36; t++){
+      for(int i = 0; i < 36; i++){
+        if(m_Card[t]->m_State == TABLECARD){// если нашли карту которая на столе
+          if(m_Card[i]->m_State == GOINGPLAYER){// если сравниваемая карта принадлежит ходящему игроку
+            if(m_Card[t]->m_Mast == m_Card[i]->m_Mast)// если масти этих карт совпадают
+              if(m_Card[t]->m_Value == (m_Card[i]->m_Value+1) ||  // выбираем карту достоинством на 1 меньше или больше
+                 m_Card[t]->m_Value == (m_Card[i]->m_Value-1)   ){// чем карта на столе
+
+                m_Card[i]->CardOpen(true);//открываем карту
+                //непосредственно ход
+                DoGoCard(m_Card[i]);
+                is_go = true;// ход сделан
+                BREAK = true;
+                break;
+              }
+          }// m_Card[i]->m_State == GOINGPLAYER
+        }// if(m_Card[t]->m_State == TABLECARD){
+      }
+      if(BREAK == true)break;
+      
+    }// for(int t = 0; t < 36; t++){
+
+    // если ход не сделан какой-нибудь не девяткой
+    // ищем девятку если есть ходим
+    if(is_go == false){
+
+      for(int i = 0; i < 36; i++){
+        if(m_Card[i]->m_State == GOINGPLAYER &&
+           m_Card[i]->m_Value == e_9){
+
+            m_Card[i]->CardOpen(true);//открываем карту
+            //непосредственно ход
+            DoGoCard(m_Card[i]);
+            break;
+          }
+      }
+    }
+  }//else{ if(m_IsNewParty == true && m_IsFirstMove == true){
+
+
+}
+
+
+// функция хода карт пользователя
+bool TMainForm::GoUser(TFCard* card)
+{
+  //эта строчка предотвращает нечестный ход пользователя
+  //т.е. если не ваш ход, ходить нельзя
+  if(GOINGPLAYER != USERPLAYER) return false;
+
+  
+  //гасим надпись над картами пользователя
+  LTablo->Visible = false;
+
+  //если первый ход в игре
+  if(m_IsFirstMove == true){
+
+    // и начало новой партии
+    if(m_IsNewParty == true){
+      // ходить можно только девяткой бубен
+      if(card->m_Mast != e_bubi || card->m_Value != e_9){
+        LTablo->Visible = true;
+        LTablo->Caption = "Первый ход девяткой бубен!";
+
+
+        TimerMain->Enabled = true;// для стирания и изменения надписи над картами
+        return false;
+      }
+      else{
+        //непосредственно ход
+        DoGoCard(card);
+      }
+    }
+    else{//если это не начало новой партии
+      // ходить можно любой девяткой и только девяткой
+      if(card->m_Value != e_9){
+        LTablo->Visible = true;
+        LTablo->Caption = "Первый ход только девяткой!";
+        TimerMain->Enabled = true;// для стирания и изменения надписи над картами
+        return false;
+      }
+      else{
+        //непосредственно ход
+        DoGoCard(card);
+      }
+    }
+    
+  }//if(m_IsFirstMove == true){
+  else{// если не первый ход в игре
+    //ходить можно любой картой соблюдая условия - карта должна быть девяткой
+    // или совпадать по масти
+    // с лежащей картой на столе и быть по значению на единицу больше или меньше
+    // карты на столе
+    bool is_go = false;
+
+    if(card->m_Value == e_9){
+      //непосредственно ход
+      DoGoCard(card);
+      is_go = true;
+    }
+
+    for(int t = 0; t < 36; t++){
+      if(m_Card[t]->m_State == TABLECARD   &&
+         m_Card[t]->m_Mast == card->m_Mast &&
+         (m_Card[t]->m_Value == (card->m_Value+1) ||
+         m_Card[t]->m_Value == (card->m_Value-1))  ){
+
+         //непосредственно ход
+         DoGoCard(card);
+         is_go = true;
+         break;
+      }
+    }
+    if(is_go == false){
+      LTablo->Visible = true;
+      LTablo->Caption = "Этой картой ходить нельзя!";
+      TimerMain->Enabled = true;
+    }
+
+  }
+
+  
+  return true;
+}
+
+
+// функция определяющая кто ходит в данный момент
+// место работы TimerMainTimer(...)
+void TMainForm::WhoGoes()
+{
+
+  // если начинается новая партия
+  // вычисляем кто должен ходить
+  if(m_IsNewParty == true && m_IsFirstMove == true){
+    // ищем у кого 9 бубен
+    for(int i = 0; i < 36; i++){
+      if(m_Card[i]->m_Value == e_9 && m_Card[i]->m_Mast == e_bubi){
+        //если 9 бубен нашли, запоминаем у кого игрока она находится
+        // тот и будет ходить
+        GOINGPLAYER = m_Card[i]->m_State;
+        //игрока запомнили, цикл останавливаем
+        break;
+      }
+    }
+  }// if(m_IsNewGame == true){
+
+  //перед ходом игрока проверяем не катится ли этот игрок
+  if(IsProcat() == true){
+
+    // непосредственно прокат
+    DoProcat();
+
+    GOINGPLAYER++;
+    if(GOINGPLAYER == 4) GOINGPLAYER = 1;
+    TimerMain->Enabled = true;
+  }
+  else{
+
+    // решили кто ходит запускаем главный таймер
+    if(GOINGPLAYER != USERPLAYER){//запускаем только для компьютерных игроков
+    // потому что пользователь самостоятельно запустит таймер
+      GoComp();
+      TimerMain->Enabled = true;
+      //LTablo->Caption = GOINGPLAYER;
+    }
+    else{
+      LTablo->Visible = true;
+      LTablo->Caption = "Ваш ход!";
+    }
+  }
+}
+
+// непосредственно прокат
+void TMainForm::DoProcat()
+{
+  // сигнал события проката
+  Beep(1000, 50);
+  Beep(500, 50);
+  Beep(2000, 50);
+
+  LTablo->Visible = true;
+  if(GOINGPLAYER == 1)
+      LTablo->Caption = "Вы прокатились!";
+  if(GOINGPLAYER == 2)
+      LTablo->Caption = "Серега прокатился!";
+  if(GOINGPLAYER == 3)
+      LTablo->Caption = "Колян прокатился!";
+
+
+}
+
+// функция определяющая прокатывается ли ходящий игрок
+bool TMainForm::IsProcat()
+{
+  if(m_IsFirstMove == true && m_IsNewParty == true) return false;
+  bool is_procat = true;
+  bool BREAK = false;
+  // ищем карту которой может ходить  игрок
+  for(int t = 0; t < 36; t++){
+    for(int i = 0; i < 36; i++){
+      if(m_Card[t]->m_State == TABLECARD){// если нашли карту которая на столе
+        if(m_Card[i]->m_State == GOINGPLAYER){// если сравниваемая карта принадлежит ходящему игроку
+          if(m_Card[t]->m_Mast == m_Card[i]->m_Mast)// если масти этих карт совпадают
+            if(m_Card[t]->m_Value == (m_Card[i]->m_Value+1) ||
+               m_Card[t]->m_Value == (m_Card[i]->m_Value-1)   ){
+
+                is_procat = false;
+                BREAK = true;
+                break;
+            }
+        }// m_Card[i]->m_State == GOINGPLAYER
+      }// if(m_Card[t]->m_State == TABLECARD){
+    }
+    if(BREAK == true)
+      break;
+  }// for(int t = 0; t < 36; t++){
+
+  // или если есть девятка
+  for(int i = 0; i < 36; i++){
+    if(m_Card[i]->m_State == GOINGPLAYER &&// если сравниваемая карта принадлежит ходящему игроку
+       m_Card[i]->m_Value == e_9){//  и она девятка
+       is_procat = false;
+       break;
+    }
+  }
+
+  // если игрок все же катиться
+  // он платит штраф в банк
+  if(is_procat == true){
+    MoneyToBank(GOINGPLAYER);
+  }
+  
+  return is_procat;
+}
+
+
+// функция проверки на окончание текущей игры
+bool TMainForm::CheckEndGame()
+{
+  bool is_endgame = true;
+  for(int i = 0; i < 36; i++){
+    if(m_Card[i]->m_State == GOINGPLAYER){// если карты принадлежат ходившему игроку
+      // если хоть одна карта есть у ходившего игрока
+      // о конце игры говорить еще рано
+      is_endgame = false;
+      break;
+    }
+  }
+  // если первая игра в новой партии закончена,
+  // для продолжения партии необходимо использовать элемент меню
+  // "Следующая игра"
+  if(is_endgame == true){
+
+    // игра закончилась, эта переменная нам нужна
+    // для того чтобы после окончания игры
+    // любые действия пользователя или таймера не приводили бы
+    // к продолжению игры, в другом модуле эту переменную можно проверить
+    // функцией IsEndGame() поскольку она объявлена как public
+    // и доступна из других модулей
+    m_bEndGame = true;
+    m_IsNewParty = false;
+    NNextGame->Enabled      = true;
+    NPopupNextgame->Enabled = true;
+    TimerMain->Enabled = false;
+
+    MoneyToPlayer(GOINGPLAYER);// деньги из банка победителю
+  }
+
+  return is_endgame;
+}
+
+
+// функция непосредственно движения карт игроков на стол
+bool TMainForm::DoGoCard(TFCard* card)
+{
+  card->m_State = TABLECARD;
+  // по масти и достоинству карты узнаем ее место на игровом столе
+  card->Left = CoordinatesTableCard[card->m_Mast-1][card->m_Value-1].x;
+  card->Top  = CoordinatesTableCard[card->m_Mast-1][card->m_Value-1].y;
+
+  // после хода карты первый ход уже произведен
+  m_IsFirstMove = false;
+  if(CheckEndGame() == false){// если игра не окончена
+    GOINGPLAYER++;
+    if(GOINGPLAYER == 4) GOINGPLAYER = 1;
+    // если все в порядке запускаем таймер хода
+    TimerMain->Enabled = true;
+  }
+  else{ // если игра окончена
+    //ShowMessage("Игра закончена!");
+
+
+    // если партия не окончена
+    if(CheckEndParty() == false){
+      LTablo->Visible = true;
+      LTablo->Caption = "Игра закончена!";
+      MessageBox(Handle, "Игра закончена!", "Внимание", MB_OK);
+    }
+    else{// иначе
+      NNextGame->Enabled      = false;
+      NPopupNextgame->Enabled = false;
+      m_bEndParty = false;
+     
+    }
+  }
+
+  return true;
+}
+
+
+// функция перемешивания колоды
+void TMainForm::ShufflePack()
+{
+  int r;
+  TFCard* temp;
+  for(int i = 0; i < 36; i++){
+    temp = m_Card[i];// карту которую как бы вытаскиваем из колоды запоминаем
+    r = random(36);// функция дающая нам почти случайные числа от 0 до 35
+    m_Card[i] = m_Card[r];// на место вытащенной вкладываем случайно выбранную карту
+    m_Card[r] = temp;// а на место случайной карты вкладываем вытащенную
+    // таким способом перетусуем всю колоду
+  }
+  
+  // после тусовки карты располагаем одна над другой
+  for(int j = 0; j < 36; j++){
+    m_Card[j]->BringToFront();
+  }
+}
+
+
+// деньги на бочку и точка
+// вначале игры и при прокате игроков
+void TMainForm::MoneyToBank(int player)
+{
+  switch(player){
+    case USERPLAYER:
+      if(m_UserMoney != 0)
+      {
+        m_UserMoney -= 10;
+        m_BankMoney += 10;
+      }
+      break;
+    case LEFTPLAYER:
+      if(m_LeftMoney != 0)
+      {
+        m_LeftMoney -= 10;
+        m_BankMoney += 10;
+      }
+      break;
+    case RIGHTPLAYER:
+      if(m_RightMoney != 0)
+      {
+        m_RightMoney -= 10;
+        m_BankMoney += 10;
+      }
+      break;
+  }
+  
+  InitMoney(false);
+}
+
+
+// функция просто проверки - закончилась игра или нет
+bool TMainForm::IsEndGame()
+{
+  return m_bEndGame;
+}
+
+
+// деньги из банка победителю
+// после окончания игры
+void TMainForm::MoneyToPlayer(int winner)
+{
+  switch(winner){
+    case USERPLAYER:
+      m_UserMoney += m_BankMoney;
+      m_BankMoney  = 0;
+      break;
+    case LEFTPLAYER:
+      m_LeftMoney += m_BankMoney;
+      m_BankMoney  = 0;
+      break;
+    case RIGHTPLAYER:
+      m_RightMoney += m_BankMoney;
+      m_BankMoney   = 0;
+      break;
+  }
+  InitMoney(false);
+}
+
+
+// правильно располагаем карты пользователя
+void TMainForm::UserCardsPos()
+{
+   // сначала узнаем сколько мастей у пользователя
+   int countmast = 0;
+   for(int m = 1; m <= 4; m++)
+    for(int i = 0; i < 36; i++){
+      if (m_Card[i]->m_State == USERPLAYER &&
+          m_Card[i]->m_Mast  == m){
+          countmast++;
+          break;
+      }
+   }
+
+   // расстояние между картами разных мастей
+   int distance = 30;
+
+   // добавочная переменная на значение которой смещаются все карты пользователя
+   // чтобы независимо от количества мастей карты пользователя
+   // были ровно по середине
+   int add = (distance/2) * (countmast-1);
+   
+   // смещаем координаты карт пользователя влево
+   for(int i = 0; i < 12; i++)
+    UserCardLeft[i] -= add;
+
+
+  // далее располагаем карты пользователя по мастям(и по значениям) и с промежутками
+  int countcarduser = 0;
+  bool is = false;
+  for(int mast = 1; mast <= 4; mast++){// берем определенную масть
+    for(int value = 1; value <= 9; value++){// затем в этой масти ищем карты начиная с самой маленькой
+      for(int i = 0; i < 36; i++){// и из всех карт выбираем только карты пользователя
+        if(m_Card[i]->m_State == USERPLAYER &&
+           m_Card[i]->m_Mast  == mast &&
+           m_Card[i]->m_Value == value){
+           m_Card[i]->Left = UserCardLeft[countcarduser++];
+           m_Card[i]->BringToFront();
+           
+           is = true;// если такая масть есть отмечаем это
+        }
+      }// for(int i = 0; i < 36; i++){
+    }// for(int value = 1; value <= 9; value++){
+    
+    if(is == true){
+      //UserCardLeft[countcarduser] += distance;
+      for(int d = 0; d < 12; d++)
+          UserCardLeft[d] += distance;// как только обследовали данную масть, сдвигаем предыдущие карты пользователя
+
+      is = false;// сбрасываем отметку исследованной масти
+    }
+    
+  }// for(int m = 1; m <= 4; m++){
+
+}
+
+
+
+
+// проверка на окончание партии
+bool TMainForm::CheckEndParty()
+{
+
+  //если у кого-либо из игроков закончились монеты значит партия окончена
+  if(m_UserMoney == 0 || m_LeftMoney == 0 || m_RightMoney == 0){
+    m_bEndParty = true;// указатель, что партия окончена.
+  }
+  else{
+    return false;
+  }
+
+  // далее надо определить победителя, т.е. у кого больше всех монет
+  int money = 300;// наибольшее возможное выигранное количество монет
+
+  AnsiString S, sUser, sLeft, sRight;
+
+  // определение первого места
+  int temp;
+  bool is = false;
+  for(int i = money; i >= 0; i--){
+    if(m_UserMoney == i){
+      is = true;
+      S = "Игрок "      + LNameUser->Caption + " занял первое место" + "\t- " + IntToStr(m_UserMoney)  + "руб."  + "\n";
+    }
+    if(m_LeftMoney == i){
+      is = true;
+      sLeft = "Игрок "  + LNameLeft->Caption + " занял первое место" + "\t- " + IntToStr(m_LeftMoney)  + "руб."  + "\n";
+      S += sLeft;
+    }
+    if(m_RightMoney == i){
+      is = true;
+      sRight = "Игрок " + LNameRight->Caption + " занял первое место" + "\t- " + IntToStr(m_RightMoney) + "руб."  + "\n";
+      S += sRight;
+    }
+
+    // если претендент на первое место определен, останавливаем цикл
+    if(is == true){
+      temp = i;
+      break;
+    }
+  }
+
+  // определение второго места
+  is = false;
+  for(int i = (temp-1); i >= 0; i--){
+    if(m_UserMoney == i){
+      is = true;
+      sUser = "Игрок "  + LNameUser->Caption + " занял второе место" + "\t- " + IntToStr(m_UserMoney) + "руб."  + "\n";
+      S += sUser;
+    }
+    if(m_LeftMoney == i){
+      is = true;
+      sLeft = "Игрок "  + LNameLeft->Caption + " занял второе место" + "\t- " + IntToStr(m_LeftMoney) + "руб."  + "\n";
+      S += sLeft;
+    }
+    if(m_RightMoney == i){
+      is = true;
+      sRight = "Игрок " + LNameRight->Caption + " занял второе место"+ "\t- " + IntToStr(m_RightMoney) + "руб."  + "\n";
+      S += sRight;
+    }
+
+    // если претендент на второе место определен, останавливаем цикл
+    if(is == true){
+      temp = i;
+      break;
+    }
+  }
+
+  // определение третьего места
+  is = false;
+  for(int i = (temp-1); i >= 0; i--){
+    if(m_UserMoney == i){
+      is = true;
+      sUser = "Игрок "  + LNameUser->Caption + " занял третье место" + "\t- " + IntToStr(m_UserMoney) + "руб."  + "\n";
+      S += sUser;
+    }
+    if(m_LeftMoney == i){
+      is = true;
+      sLeft = "Игрок "  + LNameLeft->Caption + " занял третье место" + "\t- " + IntToStr(m_LeftMoney) + "руб."  + "\n";
+      S += sLeft;
+    }
+    if(m_RightMoney == i){
+      is = true;
+      sRight = "Игрок " + LNameRight->Caption + " занял третье место" + "\t- " + IntToStr(m_RightMoney) + "руб."  + "\n";
+      S += sRight;
+    }
+
+    // если претендент на второе место определен, останавливаем цикл
+    if(is == true){
+      break;
+    }
+  }
+
+  MessageBox(Handle, "   Партия окончена!   ", "Внимание", MB_OK);
+
+  // для показа статистики партии
+  // специальное окошко в котором
+  //         главное окно   текст в окне      загололовок         тип кнопки
+  MessageBox(   Handle,        S.c_str(),       "Статистика",       MB_OK);
+
+  return m_bEndParty;
+
+}
